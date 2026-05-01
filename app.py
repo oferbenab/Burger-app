@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime, time
+import json
 
 # --- הגדרות דף ---
-st.set_page_config(page_title="הפסאז' - ניהול אירועים", layout="wide")
+st.set_page_config(page_title="הפסאז' - ניהול מתקדם", layout="wide")
 
 st.markdown("""
     <style>
@@ -12,36 +13,47 @@ st.markdown("""
     html, body, [class*="css"] { font-family: 'Assistant', sans-serif; text-align: right; direction: rtl; }
     .stTabs [data-baseweb="tab-list"] { gap: 10px; justify-content: center; }
     input { font-size: 16px !important; }
-    /* כפתור איפוס בולט */
-    .stButton>button[kind="secondary"] { width: 100%; border: 2px solid #ff4b4b; color: #ff4b4b; font-weight: bold; }
+    .stButton>button[kind="secondary"] { width: 100%; border: 2px solid #ff4b4b; color: #ff4b4b; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- חיבור ל-DB ---
-conn = sqlite3.connect('passaz_final_v12.db', check_same_thread=False)
+conn = sqlite3.connect('passaz_pro_v13.db', check_same_thread=False)
 c = conn.cursor()
 c.execute('CREATE TABLE IF NOT EXISTS menu (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, price INTEGER)')
-c.execute('CREATE TABLE IF NOT EXISTS orders (name TEXT, details TEXT, total INTEGER, date TEXT, notes TEXT)')
+# שדרוג טבלת הזמנות לשמירת נתונים מורכבים ב-JSON לטעינה חוזרת
+c.execute('''CREATE TABLE IF NOT EXISTS orders 
+             (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, date TEXT, total INTEGER, 
+              details_text TEXT, raw_cart TEXT, customer_data TEXT)''')
 conn.commit()
-
-# --- פונקציית איפוס ---
-def reset_order():
-    st.session_state.cart = []
-    st.session_state.q_idx += 100  # שינוי מפתח כדי לאפס שדות כמות
-    for k in ['nm', 'ph', 'em', 'gs', 'ppg', 'bd', 'notes']:
-        st.session_state[k] = None if k in ['gs', 'ppg', 'bd'] else ""
-    st.toast("השדות אופסו - מוכן להזמנה חדשה!")
 
 # --- ניהול זיכרון (Session State) ---
 if 'cart' not in st.session_state: st.session_state.cart = []
 if 'q_idx' not in st.session_state: st.session_state.q_idx = 0
 
-# אתחול שדות במידה ולא קיימים
-for k in ['nm', 'ph', 'em', 'gs', 'ppg', 'bd', 'notes']:
+cust_keys = ['nm', 'ph', 'em', 'gs', 'ppg', 'bd', 'notes']
+for k in cust_keys:
     if k not in st.session_state:
         st.session_state[k] = None if k in ['gs', 'ppg', 'bd'] else ""
 
-# --- כפתור איפוס עליון ---
+# --- פונקציות עזר ---
+def reset_order():
+    st.session_state.cart = []
+    st.session_state.q_idx += 100
+    for k in ['nm', 'ph', 'em', 'gs', 'ppg', 'bd', 'notes']:
+        st.session_state[k] = None if k in ['gs', 'ppg', 'bd'] else ""
+
+def load_order(raw_cart, cust_data):
+    try:
+        st.session_state.cart = json.loads(raw_cart)
+        data = json.loads(cust_data)
+        for k, v in data.items():
+            st.session_state[k] = v
+        st.toast("ההזמנה נטענה! ניתן לערוך בלשונית הזמנה")
+    except:
+        st.error("שגיאה בטעינת הנתונים")
+
+# --- ממשק משתמש ---
 st.button("🆕 הזמנה חדשה (איפוס שדות)", on_click=reset_order, type="secondary")
 
 tab1, tab2, tab3 = st.tabs(["📝 הזמנה", "📋 היסטוריה", "⚙️ תפריט"])
@@ -59,16 +71,14 @@ with tab1:
         st.session_state.ppg = c4.number_input("לסועד", min_value=0, step=1, value=st.session_state.ppg, placeholder="₪")
         st.session_state.bd = c5.number_input("תקציב", min_value=0, step=1, value=st.session_state.bd, placeholder="₪")
         
-        st.write("📅 מועד האירוע:")
+        st.write("📅 מועד:")
         col_d, col_t = st.columns(2)
         ev_date = col_d.date_input("תאריך")
         ev_time = col_t.time_input("שעה", value=time(20, 0))
-        
-        st.session_state.notes = st.text_area("הערות מיוחדות", value=st.session_state.notes)
+        st.session_state.notes = st.text_area("הערות", value=st.session_state.notes)
 
     st.divider()
     
-    # סל מנות
     m_df = pd.read_sql_query("SELECT item, price FROM menu", conn)
     if not m_df.empty:
         c_it, c_qy, c_ad = st.columns([3, 1, 1])
@@ -83,47 +93,64 @@ with tab1:
     
     if st.session_state.cart:
         st.table(pd.DataFrame(st.session_state.cart))
-        
-        gs_val = st.session_state.gs if st.session_state.gs else 0
-        ppg_val = st.session_state.ppg if st.session_state.ppg else 0
-        bd_val = st.session_state.bd if st.session_state.bd else 0
-        
-        subtotal = sum(i["סה''כ"] for i in st.session_state.cart) + (gs_val * ppg_val)
+        gs_v = st.session_state.gs if st.session_state.gs else 0
+        ppg_v = st.session_state.ppg if st.session_state.ppg else 0
+        subtotal = sum(i["סה''כ"] for i in st.session_state.cart) + (gs_v * ppg_v)
         tip_pct = st.radio("טיפ", [0, 10, 15, 20], format_func=lambda x: f"{x}%", horizontal=True)
         total_all = int(subtotal * (1 + tip_pct/100))
         
-        m1, m2 = st.columns(2)
-        m1.metric("סה''כ", f"{total_all:,} ₪")
-        if bd_val > 0:
-            m2.metric("תקציב", f"{bd_val:,} ₪", delta=int(bd_val - total_all))
+        st.metric("סה''כ סופי", f"{total_all:,} ₪")
         
         if st.button("💾 שמור הזמנה סופית", type="primary"):
-            summary = f"סועדים: {gs_val} | " + ", ".join([f"{i['מנה']} x{i['כמות']}" for i in st.session_state.cart])
-            full_date = f"{ev_date.strftime('%d/%m/%y')} {ev_time.strftime('%H:%M')}"
-            c.execute("INSERT INTO orders (name, details, total, date, notes) VALUES (?,?,?,?,?)", 
-                     (st.session_state.nm, summary, total_all, full_date, st.session_state.notes))
+            summary = f"סועדים: {gs_v} | " + ", ".join([f"{i['מנה']} x{i['כמות']}" for i in st.session_state.cart])
+            f_date = f"{ev_date.strftime('%d/%m/%y')} {ev_time.strftime('%H:%M')}"
+            
+            # שמירת נתונים גולמיים לטעינה עתידית
+            raw_cart = json.dumps(st.session_state.cart)
+            cust_data = json.dumps({k: st.session_state[k] for k in cust_keys})
+            
+            c.execute("INSERT INTO orders (name, date, total, details_text, raw_cart, customer_data) VALUES (?,?,?,?,?,?)", 
+                     (st.session_state.nm, f_date, total_all, summary, raw_cart, cust_data))
             conn.commit()
-            st.success("ההזמנה נשמרה בהיסטוריה!")
+            st.success("נשמר!")
 
 # --- לשונית 2: היסטוריה ---
 with tab2:
-    st.subheader("היסטוריית הזמנות")
-    st.dataframe(pd.read_sql_query("SELECT * FROM orders ORDER BY rowid DESC", conn), use_container_width=True)
+    st.subheader("📋 היסטוריית הזמנות")
+    hist_df = pd.read_sql_query("SELECT id, name as 'לקוח', date as 'תאריך', total as 'סכום', raw_cart, customer_data FROM orders ORDER BY id DESC", conn)
+    
+    if hist_df.empty:
+        st.info("אין הזמנות שמורות")
+    else:
+        for idx, row in hist_df.iterrows():
+            with st.container():
+                # שורה אחת לכל רשומה בהיסטוריה
+                c_data, c_load, c_del = st.columns([4, 1, 1])
+                c_data.write(f"**{row['לקוח']}** | {row['תאריך']} | **{row['סכום']:,} ₪**")
+                
+                # כפתור טעינה
+                if c_load.button("🔄 טען", key=f"ld_{row['id']}", help="טען להזמנה חדשה"):
+                    load_order(row['raw_cart'], row['customer_data'])
+                    st.rerun()
+                
+                # כפתור מחיקה
+                if c_del.button("🗑️", key=f"del_{row['id']}", help="מחק מהיסטוריה"):
+                    c.execute("DELETE FROM orders WHERE id=?", (row['id'],))
+                    conn.commit()
+                    st.rerun()
+                st.divider()
 
-# --- לשונית 3: ניהול תפריט ---
+# --- לשונית 3: תפריט ---
 with tab3:
-    st.subheader("⚙️ עריכת תפריט מוצרים")
-    df_menu = pd.read_sql_query("SELECT id, item as 'שם המוצר', price as 'מחיר' FROM menu", conn)
-    df_menu['מחיר'] = df_menu['מחיר'].fillna(0).astype(int)
+    st.subheader("⚙️ עריכת תפריט")
+    df_m = pd.read_sql_query("SELECT id, item as 'שם המוצר', price as 'מחיר' FROM menu", conn)
+    df_m['מחיר'] = df_m['מחיר'].fillna(0).astype(int)
+    edited = st.data_editor(df_m, column_config={"id": None}, num_rows="dynamic", use_container_width=True, hide_index=True, key="menu_v13")
     
-    edited_df = st.data_editor(df_menu, column_config={"id": None, "מחיר": st.column_config.NumberColumn("מחיר (₪)", format="%d")},
-                               num_rows="dynamic", use_container_width=True, hide_index=True, key="menu_v12")
-    
-    if st.button("💾 שמור שינויים בתפריט"):
+    if st.button("💾 שמור תפריט"):
         c.execute("DELETE FROM menu")
-        for _, row in edited_df.iterrows():
-            if row['שם המוצר']:
-                c.execute("INSERT INTO menu (item, price) VALUES (?,?)", (row['שם המוצר'], int(row['מחיר'])))
+        for _, r in edited.iterrows():
+            if r['שם המוצר']:
+                c.execute("INSERT INTO menu (item, price) VALUES (?,?)", (r['שם המוצר'], int(r['מחיר'])))
         conn.commit()
-        st.success("התפריט עודכן!")
-        st.rerun()
+        st.success("עודכן!")
