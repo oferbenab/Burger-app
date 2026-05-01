@@ -4,125 +4,144 @@ import sqlite3
 from datetime import datetime
 
 # --- הגדרות דף ---
-st.set_page_config(page_title="הפסאז' - ניהול אירועים", layout="wide")
+st.set_page_config(page_title="הפסאז'", layout="wide")
 
-# עיצוב מותאם למובייל (אייפון)
+# עיצוב מיוחד לאייפון - מניעת שבירת שורות ושיפור כפתורים
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Assistant:wght@400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Assistant', sans-serif; text-align: right; direction: rtl; }
-    .stButton>button { width: 100%; border-radius: 12px; font-weight: bold; height: 3.5em; margin-top: 10px; }
-    input { font-size: 16px !important; } 
-    .main-header { font-size: 24px; font-weight: bold; color: #ff4b4b; margin-bottom: 15px; }
+    .stButton>button { width: 100%; border-radius: 12px; font-weight: bold; height: 3em; }
+    input { font-size: 16px !important; }
+    /* ניסיון להצמדת עמודות במובייל */
+    [data-testid="column"] { min-width: 45% !important; flex: 1 1 45% !important; }
+    .budget-box { padding: 10px; border-radius: 10px; text-align: center; font-weight: bold; margin-top: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- ניהול זיכרון (Session State) ---
-if 'v3_page' not in st.session_state: st.session_state.v3_page = "order"
-if 'v3_cart' not in st.session_state: st.session_state.v3_cart = []
-if 'v3_qty_key' not in st.session_state: st.session_state.v3_qty_key = 0
+if 'page' not in st.session_state: st.session_state.page = "הזמנה"
+if 'order_cart' not in st.session_state: st.session_state.order_cart = []
+if 'qty_key' not in st.session_state: st.session_state.qty_key = 0
 
-# משתני לקוח לשמירה במעבר דפים
-for k in ['n', 'p', 'e', 'g', 'b']:
-    if k not in st.session_state: st.session_state[k] = None if k in ['g', 'b'] else ""
+# אתחול שדות לקוח
+client_fields = {'name': "", 'phone': "", 'email': "", 'guests': 1, 'budget': 0, 'tip_pct': "0%"}
+for key, val in client_fields.items():
+    if key not in st.session_state: st.session_state[key] = val
 
-# --- חיבור למסד נתונים ---
-conn = sqlite3.connect('passaz_final.db', check_same_thread=False)
+# --- חיבור ל-DB ---
+conn = sqlite3.connect('passaz_v4.db', check_same_thread=False)
 c = conn.cursor()
 c.execute('CREATE TABLE IF NOT EXISTS menu (item TEXT, price REAL)')
-c.execute('CREATE TABLE IF NOT EXISTS orders (name TEXT, phone TEXT, items TEXT, total REAL, date TEXT)')
+c.execute('CREATE TABLE IF NOT EXISTS orders (details TEXT, total REAL, client TEXT, date TEXT)')
 conn.commit()
 
-# --- 1. תפריט ניווט עליון (שורה אחת) ---
+# --- ניווט עליון ---
 n1, n2, n3 = st.columns(3)
-if n1.button("📝 הזמנה"): st.session_state.v3_page = "order"
-if n2.button("📋 היסטוריה"): st.session_state.v3_page = "history"
-if n3.button("⚙️ תפריט"): st.session_state.v3_page = "menu"
+if n1.button("📝 מסך הזמנה"): st.session_state.page = "הזמנה"
+if n2.button("📋 היסטוריה"): st.session_state.page = "היסטוריה"
+if n3.button("⚙️ תפריט"): st.session_state.page = "תפריט"
 st.divider()
 
-# --- עמוד: הזמנה חדשה ---
-if st.session_state.v3_page == "order":
-    st.markdown('<div class="main-header">ביצוע הזמנה</div>', unsafe_allow_html=True)
+# --- עמוד הזמנה ---
+if st.session_state.page == "הזמנה":
+    st.subheader("פרטי לקוח ואירוע")
     
-    # סידור שדות לפי בקשתך (באייפון יפרסו לפי הצורך)
     # שורה 1: שם וטלפון
-    r1_1, r1_2 = st.columns(2)
-    st.session_state.n = r1_1.text_input("שם לקוח / קבוצה", value=st.session_state.n)
-    st.session_state.p = r1_2.text_input("טלפון", value=st.session_state.p)
+    c1, c2 = st.columns(2)
+    st.session_state.name = c1.text_input("שם לקוח", value=st.session_state.name)
+    st.session_state.phone = c2.text_input("טלפון", value=st.session_state.phone)
     
-    # שורה 2: אימייל
-    st.session_state.e = st.text_input("אימייל", value=st.session_state.e)
+    # שורה 2: אימייל (מתחת)
+    st.session_state.email = st.text_input("אימייל", value=st.session_state.email)
     
-    # שורה 3: סועדים ותקציב (מתחת לאימייל)
-    r2_1, r2_2 = st.columns(2)
-    st.session_state.g = r2_1.number_input("מספר סועדים", min_value=1, step=1, value=st.session_state.g)
-    st.session_state.b = r2_2.number_input("תקציב יעד (₪)", min_value=0, step=10, value=st.session_state.b)
+    # שורה 3: סועדים ותקציב
+    c3, c4 = st.columns(2)
+    st.session_state.guests = c3.number_input("סועדים", min_value=1, value=st.session_state.guests)
+    st.session_state.budget = c4.number_input("תקציב (₪)", min_value=0, value=st.session_state.budget)
     
-    # שורה 4: תאריך ושעה
-    r3_1, r3_2 = st.columns(2)
-    ev_date = r3_1.date_input("תאריך האירוע", value=datetime.now())
-    ev_time = r3_2.time_input("שעת האירוע", value=datetime.now())
+    # שורה 4: תאריך ושעה (בחירה יעילה)
+    c5, c6, c7 = st.columns([2, 1, 1])
+    ev_date = c5.date_input("תאריך", value=datetime.now())
+    # בחירת שעה ודקות במקום הקלדה
+    hours = [f"{i:02d}" for i in range(24)]
+    mins = [f"{i:02d}" for i in range(0, 60, 5)]
+    sel_h = c6.selectbox("שעה", hours, index=19)
+    sel_m = c7.selectbox("דקות", mins, index=0)
 
     st.divider()
     
-    # --- חלק הוספת המנות (כאן הייתה הבעיה) ---
-    st.subheader("🛒 בחירת מנות מהתפריט")
-    menu_df = pd.read_sql_query("SELECT * FROM menu", conn)
+    # --- הוספת פריטים ---
+    st.subheader("🛒 ניהול הזמנה")
+    m_df = pd.read_sql_query("SELECT * FROM menu", conn)
     
-    if not menu_df.empty:
-        # פריט וכמות זה לצד זה
-        sel_col, qty_col = st.columns([2, 1])
-        item_name = sel_col.selectbox("בחר מנה", menu_df['item'].tolist())
-        item_qty = qty_col.number_input("כמות", min_value=1, step=1, value=None, key=f"q_{st.session_state.v3_qty_key}")
+    col_sel, col_q, col_add = st.columns([2, 1, 1])
+    if not m_df.empty:
+        items_list = m_df['item'].tolist()
+        chosen_item = col_sel.selectbox("בחר מנה", items_list)
+        chosen_qty = col_q.number_input("כמות", min_value=1, value=None, key=f"q_{st.session_state.qty_key}", placeholder="?")
         
-        if st.button("➕ הוסף להזמנה"):
-            if item_qty:
-                price = menu_df[menu_df['item'] == item_name]['price'].values[0]
-                st.session_state.v3_cart.append({
-                    "מנה": item_name, 
-                    "כמות": int(item_qty), 
-                    "סה''כ": int(item_qty * price)
+        if col_add.button("➕ הוסף"):
+            if chosen_qty:
+                item_price = m_df[m_df['item'] == chosen_item]['price'].values[0]
+                st.session_state.order_cart.append({
+                    "מנה": chosen_item, "כמות": int(chosen_qty), 
+                    "מחיר": int(item_price), "סה''כ": int(chosen_qty * item_price)
                 })
-                st.session_state.v3_qty_key += 1 # איפוס שדה הכמות
+                st.session_state.qty_key += 1
                 st.rerun()
-            else:
-                st.warning("נא להזין כמות")
     else:
-        st.info("התפריט ריק. יש להוסיף מנות בלשונית 'תפריט'.")
+        st.info("התפריט ריק. הוסף מנות בניהול תפריט.")
 
-    # הצגת טבלת סיכום
-    if st.session_state.v3_cart:
-        st.write("### סיכום הזמנה")
-        st.table(pd.DataFrame(st.session_state.v3_cart))
-        total_price = sum(item["סה''כ"] for item in st.session_state.v3_cart)
-        st.write(f"**סה''כ לתשלום: {total_price:,} ₪**")
+    # תצוגת הסל וחישובים
+    if st.session_state.order_cart:
+        st.table(pd.DataFrame(st.session_state.order_cart))
         
-        if st.button("💾 שמור הזמנה סופית"):
-            details = ", ".join([f"{i['מנה']} x{i['כמות']}" for i in st.session_state.v3_cart])
-            c.execute("INSERT INTO orders VALUES (?,?,?,?,?)", 
-                     (st.session_state.n, st.session_state.p, details, total_price, datetime.now().strftime("%d/%m/%Y")))
-            conn.commit()
-            st.success("ההזמנה נשמרה בהצלחה!")
-            st.session_state.v3_cart = []
-            st.rerun()
+        raw_total = sum(i["סה''כ"] for i in st.session_state.order_cart)
+        
+        # פונקציית טיפ
+        st.write("**הוספת טיפ:**")
+        tip_choice = st.radio("בחר אחוז", ["0%", "10%", "15%", "20%"], horizontal=True, key="tip_radio")
+        tip_val = int(raw_total * (int(tip_choice[:-1])/100))
+        final_total = raw_total + tip_val
+        
+        # תצוגת חישובים ותקציב
+        res_c1, res_c2 = st.columns(2)
+        with res_c1:
+            st.metric("סה''כ הזמנה", f"{raw_total:,} ₪")
+            if tip_val > 0: st.write(f"טיפ: {tip_val:,} ₪")
+            st.metric("לתשלום סופי", f"{final_total:,} ₪")
+            
+        with res_c2:
+            if st.session_state.budget > 0:
+                diff = st.session_state.budget - final_total
+                color = "#e6fffa" if diff >= 0 else "#fff5f5"
+                text_color = "green" if diff >= 0 else "red"
+                status = "יתרה" if diff >= 0 else "חריגה"
+                st.markdown(f"""<div class="budget-box" style="background:{color}; color:{text_color};">
+                            {status}: {abs(diff):,} ₪</div>""", unsafe_allow_html=True)
 
-# --- עמוד: ניהול תפריט ---
-elif st.session_state.v3_page == "menu":
+        if st.button("💾 שמור הזמנה (ללא מחיקה)"):
+            order_summary = ", ".join([f"{i['מנה']} x{i['כמות']}" for i in st.session_state.order_cart])
+            c.execute("INSERT INTO orders VALUES (?,?,?,?)", 
+                     (order_summary, final_total, st.session_state.name, datetime.now().strftime("%d/%m/%Y")))
+            conn.commit()
+            st.success("ההזמנה נשמרה בבסיס הנתונים!")
+
+# --- עמוד תפריט ---
+elif st.session_state.page == "תפריט":
     st.header("ניהול תפריט")
-    with st.form("add_dish"):
-        new_name = st.text_input("שם המנה")
-        new_price = st.number_input("מחיר", min_value=1)
-        if st.form_submit_button("הוסף לתפריט"):
-            if new_name:
-                c.execute("INSERT INTO menu VALUES (?,?)", (new_name, new_price))
+    with st.form("new_item"):
+        n = st.text_input("שם מנה")
+        p = st.number_input("מחיר", min_value=1)
+        if st.form_submit_button("הוסף"):
+            if n:
+                c.execute("INSERT INTO menu VALUES (?,?)", (n, p))
                 conn.commit()
                 st.rerun()
-    
-    st.subheader("מנות קיימות")
     st.table(pd.read_sql_query("SELECT * FROM menu", conn))
 
-# --- עמוד: היסטוריה ---
-elif st.session_state.v3_page == "history":
-    st.header("היסטוריית הזמנות")
-    history_df = pd.read_sql_query("SELECT * FROM orders ORDER BY rowid DESC", conn)
-    st.dataframe(history_df, use_container_width=True)
+# --- עמוד היסטוריה ---
+elif st.session_state.page == "היסטוריה":
+    st.header("היסטוריה")
+    st.dataframe(pd.read_sql_query("SELECT * FROM orders", conn), use_container_width=True)
